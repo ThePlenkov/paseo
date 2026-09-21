@@ -9109,6 +9109,7 @@ test("respondToPermission updates currentModeId after plan approval", async () =
   class PlanModeTestClient implements AgentClient {
     readonly provider = "codex" as const;
     readonly capabilities = TEST_CAPABILITIES;
+    resumedModeId: string | null | undefined;
 
     async isAvailable(): Promise<boolean> {
       return true;
@@ -9118,14 +9119,19 @@ test("respondToPermission updates currentModeId after plan approval", async () =
       return new PlanModeTestSession();
     }
 
-    async resumeSession(): Promise<AgentSession> {
+    async resumeSession(
+      _handle: AgentPersistenceHandle,
+      overrides?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      this.resumedModeId = overrides?.modeId;
       return new PlanModeTestSession();
     }
   }
 
+  const client = new PlanModeTestClient();
   const manager = new AgentManager({
     clients: {
-      codex: new PlanModeTestClient(),
+      codex: client,
     },
     registry: storage,
     logger,
@@ -9169,6 +9175,13 @@ test("respondToPermission updates currentModeId after plan approval", async () =
   await manager.flush();
   const persisted = await storage.get(snapshot.id);
   expect(persisted?.lastModeId).toBe("acceptEdits");
+
+  // The provider-managed switch must also reach config.modeId — otherwise a
+  // reload resumes the session with the stale creation-time mode ("plan").
+  expect(persisted?.config?.modeId).toBe("acceptEdits");
+  const reloaded = await manager.reloadAgentSession(snapshot.id);
+  expect(reloaded.config.modeId).toBe("acceptEdits");
+  expect(client.resumedModeId).toBe("acceptEdits");
 });
 
 test("respondToPermission refreshes features and runtime info after provider-managed plan approval", async () => {
